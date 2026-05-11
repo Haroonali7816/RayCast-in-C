@@ -1,0 +1,12 @@
+{
+  "editor.formatOnSave": true,
+  "c-cpp-flylint.flexelint.enable": false,
+  "c-cpp-flylint.language": "c",
+  "c-cpp-flylint.ignoreParseErrors": true,
+  "c-cpp-flylint.flawfinder.enable": false,
+  "files.associations": {
+      "*.s": "riscv",
+      "*.h": "c",
+      "*.c": "c"
+  }
+}
