@@ -38,46 +38,41 @@ Map *read_map(const char *filename) {
         return NULL;
     }
 
-    // We now initialize the default/starting values.
+    // After reading the dimensions, we need to consume the rest of the line to prepare for reading the grid.
+    int flc;
+    while ((flc = fgetc(file)) != '\n' && flc != EOF);
+
     map->wall_count = 0;
     map->x_start = -1;
     map->y_start = -1;
 
-    // Now we allocate the 2D grid.
-
     map->grid = malloc(map->height * sizeof(char *));
-    // Parse the file row by row using fgetc
+
     for (int y = 0; y < map->height; y++) {
         map->grid[y] = malloc(map->width * sizeof(char));
 
-        // Skip any leading newlines/carriage returns between rows
-        int c = fgetc(file);
-        while (c == '\n' || c == '\r') {
-            c = fgetc(file);
-        }
-
         for (int x = 0; x < map->width; x++) {
-            // If we hit EOF or a newline mid-row, fill the rest with spaces
-            if (c == EOF || c == '\n' || c == '\r') {
+            int c = fgetc(file);
+
+            // If the row ends early, pad with spaces
+            if (c == '\n' || c == '\r' || c == EOF) {
                 map->grid[y][x] = ' ';
-                continue;
-            }
 
-            map->grid[y][x] = (char)c;
+                if (c == '\r') fgetc(file);
+            } else {
+                map->grid[y][x] = (char)c;
 
-            // Track stats requested by Task 1
-            if (c == 'S') {
-                map->x_start = x;
-                map->y_start = y;
-            } else if (c != ' ') {
-                map->wall_count++;
-            }
-
-            // Read next character only if we still have columns left
-            if (x + 1 < map->width) {
-                c = fgetc(file);
+                if (c == 'S') {
+                    map->x_start = x;
+                    map->y_start = y;
+                } else if (c != ' ') {
+                    map->wall_count++;
+                }
             }
         }
+        // Consume the rest of the line if it is longer than the width.
+        int trl;
+        while ((trl = fgetc(file)) != '\n' && trl != EOF);
     }
     fclose(file);
     return map;
