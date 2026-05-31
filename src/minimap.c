@@ -9,7 +9,7 @@ void create_minimap(Map *map, const char *output_filename) {
         return;
     }
     // PPM HEADER
-    // P3
+    // P6 
     // width then height and then 255.
     fprintf(file, "P6\n%d %d\n255\n", map->width, map->height);
 

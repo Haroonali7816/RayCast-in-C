@@ -1,10 +1,11 @@
+#include "map.h"
+
 #include <stdio.h>
 #include <stdlib.h>
-#include "map.h"
 
 void free_map(Map *map) {
     if (!map) return;
-    
+
     if (map->grid) {
         // Free each row first
         for (int y = 0; y < map->height; y++) {
@@ -17,10 +18,6 @@ void free_map(Map *map) {
     free(map);
 }
 
-
-
-
-
 Map *read_map(const char *filename) {
     FILE *file = fopen(filename, "r");
     if (!file) {
@@ -29,13 +26,13 @@ Map *read_map(const char *filename) {
     }
 
     Map *map = malloc(sizeof(Map));
-    if(!map) {
+    if (!map) {
         fclose(file);
         return NULL;
     }
 
-    //Now we read width and Height from the file.
-    if (fscanf(file, "%d %d", &map->width,&map->height) != 2) {
+    // Now we read width and Height from the file.
+    if (fscanf(file, "%d %d", &map->width, &map->height) != 2) {
         free(map);
         fclose(file);
         return NULL;
@@ -48,18 +45,23 @@ Map *read_map(const char *filename) {
 
     // Now we allocate the 2D grid.
 
-    map->grid = malloc(map->height * sizeof(char*));
-    // Parse the file character by character
+    map->grid = malloc(map->height * sizeof(char *));
+    // Parse the file row by row using fgetc
     for (int y = 0; y < map->height; y++) {
         map->grid[y] = malloc(map->width * sizeof(char));
+
+        // Skip any leading newlines/carriage returns between rows
+        int c = fgetc(file);
+        while (c == '\n' || c == '\r') {
+            c = fgetc(file);
+        }
+
         for (int x = 0; x < map->width; x++) {
-            int c = fgetc(file);
-            // Skip newlines/carriage returns
-            while (c == '\n' || c == '\r') {
-                c = fgetc(file);
+            // If we hit EOF or a newline mid-row, fill the rest with spaces
+            if (c == EOF || c == '\n' || c == '\r') {
+                map->grid[y][x] = ' ';
+                continue;
             }
-        
-        if (c == EOF) break;
 
             map->grid[y][x] = (char)c;
 
@@ -69,6 +71,11 @@ Map *read_map(const char *filename) {
                 map->y_start = y;
             } else if (c != ' ') {
                 map->wall_count++;
+            }
+
+            // Read next character only if we still have columns left
+            if (x + 1 < map->width) {
+                c = fgetc(file);
             }
         }
     }
