@@ -2971,3 +2971,827 @@ C
         int trailing;
         while ((trailing = fgetc(file)) != '\n' && trailing != EOF);
     }
+
+
+    Alright so now we move to task 4 just like this. we need to pass all the public tests for that task as well. accordingly give me code for that task. first for header file, then .c file, if any edits are needed in any existing file do those changes
+
+To fully implement Task 4 (Textures) and Task 5 (Sky and Floor), we will introduce a new module to handle the Texture Atlas loading (texture.h & texture.c), update the rendering module to support texture mapping (render.h & render.c), and finally update main.c to parse the -T command.
+
+Here is the complete implementation that satisfies all conditions, including the strict mathematical constraints and the P6 PPM texture parsing with comment handling.
+
+1. Texture Module (texture.h & texture.c)
+Create these files to handle the robust loading of the Texture Atlas, specifically designed to skip # comments cleanly.
+
+texture.h
+
+C
+#ifndef TEXTURE_H
+#define TEXTURE_H
+
+typedef struct {
+    int width;
+    int height;
+    int count_x;
+    int count_y;
+    int tex_w;
+    int tex_h;
+    unsigned char *data;
+} TextureAtlas;
+
+TextureAtlas* load_texture_atlas(const char *filename, int count_x, int count_y);
+void free_texture_atlas(TextureAtlas *atlas);
+
+#endif // TEXTURE_H
+texture.c
+
+C
+#include "texture.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Helper to reliably skip whitespace and '#' comments in PPM headers
+static int get_next_int(FILE *f) {
+    int ch;
+    while (1) {
+        ch = fgetc(f);
+        if (ch == EOF) return -1;
+        if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') continue;
+        if (ch == '#') {
+            while ((ch = fgetc(f)) != '\n' && ch != EOF);
+            continue;
+        }
+        ungetc(ch, f);
+        int val;
+        if (fscanf(f, "%d", &val) != 1) return -1;
+        return val;
+    }
+}
+
+TextureAtlas* load_texture_atlas(const char *filename, int count_x, int count_y) {
+    FILE *f = fopen(filename, "rb");
+    if (!f) return NULL;
+
+    char header[3];
+    if (fscanf(f, "%2s", header) != 1 || strcmp(header, "P6") != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    int w = get_next_int(f);
+    int h = get_next_int(f);
+    int maxval = get_next_int(f);
+    
+    // consume the exact single whitespace character after maxval
+    fgetc(f);
+
+    TextureAtlas *atlas = malloc(sizeof(TextureAtlas));
+    if (!atlas) {
+        fclose(f);
+        return NULL;
+    }
+
+    atlas->width = w;
+    atlas->height = h;
+    atlas->count_x = count_x;
+    atlas->count_y = count_y;
+    atlas->tex_w = w / count_x;
+    atlas->tex_h = h / count_y;
+
+    atlas->data = malloc(w * h * 3);
+    if (atlas->data) {
+        fread(atlas->data, 1, w * h * 3, f);
+    }
+    
+    fclose(f);
+    return atlas;
+}
+
+void free_texture_atlas(TextureAtlas *atlas) {
+    if (!atlas) return;
+    if (atlas->data) free(atlas->data);
+    free(atlas);
+}
+2. Updating Render Module (render.h & render.c)
+Add the render_texture_map function. It extends our existing raycaster with texture coordinate generation (tx, ty) and shading.
+
+Update render.h
+
+C
+#ifndef RENDER_H
+#define RENDER_H
+
+#include "map.h"
+#include "texture.h"
+
+// Task 3: Untextured Rendering
+void render_map(Map *map, const char *output_file, int width, int height, double fov, double rotation, double pos_x, double pos_y);
+
+// Task 4 & 5: Textured Rendering with Shading and Ceiling/Floor
+void render_texture_map(Map *map, const char *output_file, int width, int height, double fov, double rotation, double pos_x, double pos_y, TextureAtlas *atlas, int shade, int ceiling);
+
+#endif // RENDER_H
+Append this function to render.c
+(Keep your existing is_wall, write_pixel, and render_map implementations! Just append this below them.)
+
+C
+void render_texture_map(Map *map, const char *output_file, int width, int height, double fov, double rotation, double pos_x, double pos_y, TextureAtlas *atlas, int shade, int ceiling) {
+    FILE *file = fopen(output_file, "wb");
+    if (!file) return;
+
+    fprintf(file, "P6\n%d %d\n255\n", width, height);
+
+    double fov_rad = fov * PI / 180.0;
+    double rotation_rad = rotation * PI / 180.0;
+
+    double dx = cos(rotation_rad);
+    double dy = sin(rotation_rad);
+    double pz = 0.5;
+
+    double focal = width / (2.0 * tan(fov_rad / 2.0));
+    double cx = pos_x - (dx * focal);
+    double cy = pos_y - (dy * focal);
+
+    double *column_t = malloc(width * sizeof(double));
+    int *column_side = malloc(width * sizeof(int));
+    int *column_hit = malloc(width * sizeof(int));
+    int *column_mapX = malloc(width * sizeof(int));
+    int *column_mapY = malloc(width * sizeof(int));
+    double *column_rx = malloc(width * sizeof(double));
+    double *column_ry = malloc(width * sizeof(double));
+
+    for (int x = 0; x < width; x++) {
+        double ix = cx + (x - (width / 2.0) + 0.5) * dy;
+        double iy = cy - (x - (width / 2.0) + 0.5) * dx;
+
+        double rx = pos_x - ix;
+        double ry = pos_y - iy;
+        column_rx[x] = rx;
+        column_ry[x] = ry;
+
+        int map_x = (int)floor(pos_x);
+        int map_y = (int)floor(pos_y);
+
+        double length = sqrt(rx * rx + ry * ry);
+        double ux = rx / length;
+        double uy = ry / length;
+
+        double sw = (ux == 0.0) ? INFINITY : fabs(1.0 / ux);
+        double sh = (uy == 0.0) ? INFINITY : fabs(1.0 / uy);
+
+        double sx, sy;
+        int step_x, step_y;
+
+        if (ux < 0) {
+            step_x = -1;
+            sx = (pos_x - map_x) * sw;
+        } else {
+            step_x = 1;
+            sx = (map_x + 1.0 - pos_x) * sw;
+        }
+
+        if (uy < 0) {
+            step_y = -1;
+            sy = (pos_y - map_y) * sh;
+        } else {
+            step_y = 1;
+            sy = (map_y + 1.0 - pos_y) * sh;
+        }
+
+        int hit = 0, hit_x_side = 0;
+
+        while (!hit) {
+            if (sx < sy) {
+                sx += sw;
+                map_x += step_x;
+                hit_x_side = 1;
+            } else {
+                sy += sh;
+                map_y += step_y;
+                hit_x_side = 0;
+            }
+
+            if (map_x < 0 || map_x >= map->width || map_y < 0 || map_y >= map->height) break;
+
+            if (is_wall(map, map_x, map_y)) hit = 1;
+        }
+
+        column_hit[x] = hit;
+
+        if (hit) {
+            double wx, wy, t;
+            if (hit_x_side) {
+                wx = (step_x > 0) ? map_x : (map_x + 1.0);
+                t = (wx - pos_x) / rx;
+            } else {
+                wy = (step_y > 0) ? map_y : (map_y + 1.0);
+                t = (wy - pos_y) / ry;
+            }
+            column_t[x] = t;
+            column_side[x] = hit_x_side;
+            column_mapX[x] = map_x;
+            column_mapY[x] = map_y;
+        }
+    }
+
+    for (int y = 0; y < height; y++) {
+        double iz = y - (height / 2.0) + 1.0;
+        double rz = pz - iz;
+
+        for (int x = 0; x < width; x++) {
+            unsigned char r = 0, g = 0, b = 0;
+            double rx = column_rx[x], ry = column_ry[x];
+
+            // Render Floor / Ceiling
+            if (!column_hit[x] || (pz + column_t[x] * rz < 0.0) || (pz + column_t[x] * rz > 1.0)) {
+                if (!ceiling || rz == 0.0) {
+                    write_pixel(file, 0, 0, 0);
+                    continue;
+                }
+                
+                double t_plane;
+                int tex_idx;
+                if (rz < 0) { // Floor
+                    t_plane = -pz / rz;
+                    tex_idx = 0;
+                } else { // Ceiling
+                    t_plane = (1.0 - pz) / rz;
+                    tex_idx = 1;
+                }
+                
+                if (t_plane <= 0) {
+                    write_pixel(file, 0, 0, 0);
+                    continue;
+                }
+
+                double fx = pos_x + t_plane * rx;
+                double fy = pos_y + t_plane * ry;
+
+                double tx = fx - floor(fx);
+                double ty = fy - floor(fy);
+
+                int tex_x = (int)(tx * atlas->tex_w);
+                int tex_y = (int)(ty * atlas->tex_h);
+
+                int tex_col = tex_idx % atlas->count_x;
+                int tex_row = tex_idx / atlas->count_x;
+                int px_idx = ((tex_row * atlas->tex_h + tex_y) * atlas->width + (tex_col * atlas->tex_w + tex_x)) * 3;
+
+                r = atlas->data[px_idx];
+                g = atlas->data[px_idx + 1];
+                b = atlas->data[px_idx + 2];
+
+                write_pixel(file, r, g, b);
+                continue;
+            }
+
+            // Render Wall
+            double wz = pz + column_t[x] * rz;
+            if (wz > -0.0001 && wz < 0.0) wz = 0.0;
+            if (wz > 1.0 && wz < 1.0001) wz = 1.0;
+
+            if (wz >= 0.0 && wz <= 1.0) {
+                int hit_x_side = column_side[x];
+                double wx = pos_x + column_t[x] * rx;
+                double wy = pos_y + column_t[x] * ry;
+
+                double tx = (hit_x_side == 1) ? wy : wx;
+                tx = tx - floor(tx);
+                int tex_x = (int)(tx * atlas->tex_w);
+
+                if ((rx < 0.0 && hit_x_side == 1) || (ry > 0.0 && hit_x_side == 0)) {
+                    tex_x = (atlas->tex_w - 1) - tex_x;
+                }
+
+                double ty = wz - floor(wz);
+                int tex_y = (int)(ty * atlas->tex_h);
+                tex_y = (atlas->tex_h - 1) - tex_y; // Flip vertical wall mapping
+
+                int map_x = column_mapX[x];
+                int map_y = column_mapY[x];
+                char cell = map->grid[map_y][map_x];
+                
+                int tex_idx = 2; // Default for non-number chars
+                if (cell >= '0' && cell <= '9') {
+                    tex_idx = cell - '0';
+                }
+
+                int tex_col = tex_idx % atlas->count_x;
+                int tex_row = tex_idx / atlas->count_x;
+                int px_idx = ((tex_row * atlas->tex_h + tex_y) * atlas->width + (tex_col * atlas->tex_w + tex_x)) * 3;
+
+                r = atlas->data[px_idx];
+                g = atlas->data[px_idx + 1];
+                b = atlas->data[px_idx + 2];
+
+                // Simple Shading on x-walls
+                if (shade && hit_x_side == 0) {
+                    r = (r >> 1) & 0x7F;
+                    g = (g >> 1) & 0x7F;
+                    b = (b >> 1) & 0x7F;
+                }
+                
+                write_pixel(file, r, g, b);
+            }
+        }
+    }
+
+    free(column_t);
+    free(column_side);
+    free(column_hit);
+    free(column_mapX);
+    free(column_mapY);
+    free(column_rx);
+    free(column_ry);
+    fclose(file);
+}
+3. Modifying main.c
+Finally, update the command-line argument dispatcher to detect the new -T command and safely read its (potentially optional) arguments.
+
+main.c
+(Add #include "texture.h" at the top, and append this block below your strcmp(command, "-R") == 0 block)
+
+C
+    } else if (strcmp(command, "-T") == 0) {
+        // This handles task 4 & 5 : The -T flag
+        if (argc < 13) {
+            fprintf(stderr, "Error: Missing parameters for -T\n");
+            free_map(map);
+            return 1;
+        }
+
+        const char *tex_file = argv[3];
+        int count_x = atoi(argv[4]);
+        int count_y = atoi(argv[5]);
+        const char *output_file = argv[6];
+        int width = atoi(argv[7]);
+        int height = atoi(argv[8]);
+        double fov = atof(argv[9]);
+        double rotation = atof(argv[10]);
+        double pos_x = atof(argv[11]);
+        double pos_y = atof(argv[12]);
+        
+        int shade = 0;
+        int ceiling = 0;
+
+        if (argc > 13) shade = atoi(argv[13]);
+        if (argc > 14) ceiling = atoi(argv[14]);
+
+        TextureAtlas *atlas = load_texture_atlas(tex_file, count_x, count_y);
+        if (!atlas) {
+            fprintf(stderr, "Error: Could not load texture atlas %s\n", tex_file);
+            free_map(map);
+            return 1;
+        }
+
+        render_texture_map(map, output_file, width, height, fov, rotation, pos_x, pos_y, atlas, shade, ceiling);
+
+        free_texture_atlas(atlas);
+alright now explain every section of code to me line by line. start by texture.h file and also explain to me what task 4 and 5 require me to do such that i have done task 3 already
+
+Understanding Tasks 4 and 5
+In Task 3, you built an untextured raycaster. For each screen column, you cast a ray, tracked its intersection with a wall using the DDA (Digital Differential Analysis) algorithm, calculated the distance t, and drew a solid-colored wall column whose height depended on that distance.
+
+Task 4 (Textures & Shading) and Task 5 (Sky/Ceiling & Floor) upgrade this flat presentation into an authentic retro 3D environment using texture mapping.
+
+Texture Mapping Walls (Task 4): Instead of coloring a wall pixel with a uniform solid color, you map a specific pixel (texel) from an external image (a Texture Atlas).
+
+Horizontal Coordinate (tx): When a ray hits a wall, you find out exactly where on that 1x1 map square it struck. If it hit an X-side wall, the fractional part of its Y-coordinate (wy - floor(wy)) tells you how far along the wall it hit. This fraction is scaled to the width of the texture to choose a column of pixels.
+
+Vertical Coordinate (ty): Instead of treating rows as independent, you determine the true height component of the ray (wz). The height is mapped linearly from the bottom of the wall (z=0) to the top (z=1). This fraction is scaled to the height of the texture.
+
+The Texture Atlas: All textures are packed into a single P6 PPM image file arranged in a grid of count_x by count_y individual texture tiles. The character in the map grid (e.g., '0', '1', etc.) determines which tile index from the grid is drawn.
+
+Shading: To create a sense of depth, walls aligned along one axis (e.g., X-walls) are artificially darkened (divided by 2) relative to walls on the other axis.
+
+Ceiling & Floor Mapping (Task 5): * In Task 3, any pixel above or below a wall was drawn as a solid background or left empty.
+
+In Task 5, you project the ray through the empty space above and below the wall until it intersects the horizontal ceiling plane (z=1) or floor plane (z=0). This gives you a global (x,y) world coordinate for that empty space pixel, which you map to texture tile 0 (for the floor) or tile 1 (for the ceiling).
+
+Line-by-Line Code Breakdown
+1. texture.h
+C
+#ifndef TEXTURE_H
+#define TEXTURE_H
+Lines 1–2: Header guards. They prevent compilation errors if this header file is included multiple times across different source files.
+
+C
+typedef struct {
+    int width;
+    int height;
+    int count_x;
+    int count_y;
+    int tex_w;
+    int tex_h;
+    unsigned char *data;
+} TextureAtlas;
+width, height: Total pixel dimensions of the entire image atlas file.
+
+count_x, count_y: How many individual texture tiles are packed horizontally and vertically inside the atlas.
+
+tex_w, tex_h: Calculated pixel dimensions of a single texture tile (width/count_x and height/count_y).
+
+*data: A contiguous array allocated on the heap containing the raw uncompressed RGB values (3 bytes per pixel) of the image.
+
+C
+TextureAtlas* load_texture_atlas(const char *filename, int count_x, int count_y);
+void free_texture_atlas(TextureAtlas *atlas);
+
+#endif // TEXTURE_H
+Lines 13–16: Declares functions to safely load the texture atlas into memory from a PPM file and free it when finished.
+
+2. texture.c
+C
+#include "texture.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+Lines 1–4: Standard library inclusions for handling file I/O (stdio.h), memory allocations (stdlib.h), and string operations (string.h).
+
+C
+static int get_next_int(FILE *f) {
+    int ch;
+    while (1) {
+        ch = fgetc(f);
+        if (ch == EOF) return -1;
+        if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') continue;
+        if (ch == '#') {
+            while ((ch = fgetc(f)) != '\n' && ch != EOF);
+            continue;
+        }
+        ungetc(ch, f);
+        int val;
+        if (fscanf(f, "%d", &val) != 1) return -1;
+        return val;
+    }
+}
+static int get_next_int(...): A robust integer parser designed to skip whitespaces and comment lines starting with # inside a PPM header. It reads character by character. If it encounters #, it discards everything until it reaches a newline (\n). When it finally finds a number, it pushes the non-whitespace character back into the stream (ungetc) and parses the integer via fscanf.
+
+C
+TextureAtlas* load_texture_atlas(const char *filename, int count_x, int count_y) {
+    FILE *f = fopen(filename, "rb");
+    if (!f) return NULL;
+Lines 23–25: Opens the texture atlas image in binary read mode ("rb"). If the file doesn't exist, it gracefully returns NULL.
+
+C
+    char header[3];
+    if (fscanf(f, "%2s", header) != 1 || strcmp(header, "P6") != 0) {
+        fclose(f);
+        return NULL;
+    }
+Lines 27–31: Reads the magic number identifier of the PPM file. The task specifies P6 (binary raw RGB format). If it reads anything else, it closes the file handle and aborts.
+
+C
+    int w = get_next_int(f);
+    int h = get_next_int(f);
+    int maxval = get_next_int(f);
+    
+    fgetc(f);
+Lines 33–37: Extracts the full width, full height, and maximum color depth value (usually 255) using our comment-aware integer scraper. fgetc(f); consumes the single exact whitespace character (usually a newline) that follows maxval, positioning the file pointer exactly at the start of the raw binary image data.
+
+C
+    TextureAtlas *atlas = malloc(sizeof(TextureAtlas));
+    if (!atlas) {
+        fclose(f);
+        return NULL;
+    }
+Lines 39–43: Allocates memory on the heap to store our tracking structure.
+
+C
+    atlas->width = w;
+    atlas->height = h;
+    atlas->count_x = count_x;
+    atlas->count_y = count_y;
+    atlas->tex_w = w / count_x;
+    atlas->tex_h = h / count_y;
+Lines 45–50: Assigns the loaded global metrics and derives the pixel dimensions of a single localized texture tile.
+
+C
+    atlas->data = malloc(w * h * 3);
+    if (atlas->data) {
+        fread(atlas->data, 1, w * h * 3, f);
+    }
+    
+    fclose(f);
+    return atlas;
+}
+Lines 52–58: Allocates a chunk of memory large enough to hold all image pixels (W×H×3 bytes). fread extracts the binary data directly into this array. Finally, the file is closed and the struct is returned.
+
+3. render.c (render_texture_map function)
+This function processes the heavy mathematics behind Tasks 4 and 5.
+
+C
+void render_texture_map(Map *map, const char *output_file, int width, int height, double fov, double rotation, double pos_x, double pos_y, TextureAtlas *atlas, int shade, int ceiling) {
+    FILE *file = fopen(output_file, "wb");
+    if (!file) return;
+
+    fprintf(file, "P6\n%d %d\n255\n", width, height);
+Lines 1–6: Standard file opening and writing out the output P6 PPM canvas header matching the requested dimensions.
+
+C
+    double fov_rad = fov * PI / 180.0;
+    double rotation_rad = rotation * PI / 180.0;
+
+    double dx = cos(rotation_rad);
+    double dy = sin(rotation_rad);
+    double pz = 0.5;
+Lines 8–13: Converts input parameters to radians. dx and dy represent the directional unit vector of the camera. pz = 0.5 sets the camera eye level exactly in the center of the vertical wall space.
+
+C
+    double focal = width / (2.0 * tan(fov_rad / 2.0));
+    double cx = pos_x - (dx * focal);
+    double cy = pos_y - (dy * focal);
+Lines 15–17: Sets up the projection geometry. It calculates the focal distance to the camera plane and derives the position of the projection center (cx, cy).
+
+Phase A: Ray-casting Cache Step
+C
+    double *column_t = malloc(width * sizeof(double));
+    int *column_side = malloc(width * sizeof(int));
+    int *column_hit = malloc(width * sizeof(int));
+    int *column_mapX = malloc(width * sizeof(int));
+    int *column_mapY = malloc(width * sizeof(int));
+    double *column_rx = malloc(width * sizeof(double));
+    double *column_ry = malloc(width * sizeof(double));
+Lines 19–25: Allocates cache arrays. Because Task 5 requires floor/ceiling intersections to calculate screen pixels based on vertical orientation, we can run our 2D DDA raycaster across every column once, store the data, and reuse it for drawing rows efficiently.
+
+C
+    for (int x = 0; x < width; x++) {
+        double ix = cx + (x - (width / 2.0) + 0.5) * dy;
+        double iy = cy - (x - (width / 2.0) + 0.5) * dx;
+
+        double rx = pos_x - ix;
+        double ry = pos_y - iy;
+        column_rx[x] = rx;
+        column_ry[x] = ry;
+Lines 27–34: Loops across all screen columns. Calculates the exact image plane pixel position (ix, iy) and builds the ray vector (rx, ry) originating from the player's position.
+
+C
+        int map_x = (int)floor(pos_x);
+        int map_y = (int)floor(pos_y);
+
+        double length = sqrt(rx * rx + ry * ry);
+        double ux = rx / length;
+        double uy = ry / length;
+
+        double sw = (ux == 0.0) ? INFINITY : fabs(1.0 / ux);
+        double sh = (uy == 0.0) ? INFINITY : fabs(1.0 / uy);
+Lines 36–44: Prepares the standard DDA variables. Finds the absolute initial map coordinates and normalizes the ray vector into a unit vector (ux, uy). sw and sh represent the step distances to traverse exactly 1 unit along the X or Y grid axis.
+
+C
+        double sx, sy;
+        int step_x, step_y;
+
+        if (ux < 0) {
+            step_x = -1;
+            sx = (pos_x - map_x) * sw;
+        } else {
+            step_x = 1;
+            sx = (map_x + 1.0 - pos_x) * sw;
+        }
+
+        if (uy < 0) {
+            step_y = -1;
+            sy = (pos_y - map_y) * sh;
+        } else {
+            step_y = 1;
+            sy = (map_y + 1.0 - pos_y) * sh;
+        }
+Lines 46–64: Sets the marching direction (step_x, step_y) and computes the initial starting distance to the first grid lines (sx, sy).
+
+C
+        int hit = 0, hit_x_side = 0;
+
+        while (!hit) {
+            if (sx < sy) {
+                sx += sw;
+                map_x += step_x;
+                hit_x_side = 1;
+            } else {
+                sy += sh;
+                map_y += step_y;
+                hit_x_side = 0;
+            }
+
+            if (map_x < 0 || map_x >= map->width || map_y < 0 || map_y >= map->height) break;
+
+            if (is_wall(map, map_x, map_y)) hit = 1;
+        }
+Lines 66–82: The DDA loop. Increments along the closest grid line until a boundary or a wall cell is encountered. It toggles hit_x_side = 1 if it strikes a vertical grid line, and 0 if it strikes a horizontal grid line.
+
+C
+        column_hit[x] = hit;
+
+        if (hit) {
+            double wx, wy, t;
+            if (hit_x_side) {
+                wx = (step_x > 0) ? map_x : (map_x + 1.0);
+                t = (wx - pos_x) / rx;
+            } else {
+                wy = (step_y > 0) ? map_y : (map_y + 1.0);
+                t = (wy - pos_y) / ry;
+            }
+            column_t[x] = t;
+            column_side[x] = hit_x_side;
+            column_mapX[x] = map_x;
+            column_mapY[x] = map_y;
+        }
+    }
+Lines 84–101: Computes the standard intersection parameter distance t. It updates our allocated arrays to preserve this column data for our row drawing routine.
+
+Phase B: Rendering Screen Space (Row by Row)
+C
+    for (int y = 0; y < height; y++) {
+        double iz = y - (height / 2.0) + 1.0;
+        double rz = pz - iz;
+Lines 104–106: Iterates over each horizontal scanline. iz calculates the vertical coordinate relative to the viewport projection plane, and rz represents the vertical vector component of the current viewing row.
+
+C
+        for (int x = 0; x < width; x++) {
+            unsigned char r = 0, g = 0, b = 0;
+            double rx = column_rx[x], ry = column_ry[x];
+Lines 108–110: Loops through every pixel in the row, extracting the cached ray projections.
+
+Floor and Ceiling Calculations (Task 5)
+C
+            if (!column_hit[x] || (pz + column_t[x] * rz < 0.0) || (pz + column_t[x] * rz > 1.0)) {
+                if (!ceiling || rz == 0.0) {
+                    write_pixel(file, 0, 0, 0);
+                    continue;
+                }
+Lines 113–117: This check triggers if the ray missed all walls, or if the vertical projection vector reaches above the wall top (z>1.0) or below the wall bottom (z<0.0). If floor/ceiling rendering is disabled (!ceiling), it defaults to black pixels.
+
+C
+                double t_plane;
+                int tex_idx;
+                if (rz < 0) { // Floor
+                    t_plane = -pz / rz;
+                    tex_idx = 0;
+                } else { // Ceiling
+                    t_plane = (1.0 - pz) / rz;
+                    tex_idx = 1;
+                }
+Lines 119–127: Intersects the flat planes. Using similar triangles:
+
+distance to horizontal plane t 
+plane
+​
+ = 
+rz
+Δz
+​
+ 
+If looking down (rz < 0), it uses the floor plane (z=0). If looking up (rz > 0), it target the ceiling plane (z=1). It maps the floor to texture index 0 and the ceiling to texture index 1.
+
+C
+                if (t_plane <= 0) {
+                    write_pixel(file, 0, 0, 0);
+                    continue;
+                }
+
+                double fx = pos_x + t_plane * rx;
+                double fy = pos_y + t_plane * ry;
+Lines 129–135: Multiplies the intersection distance by the ray direction vectors to find the global (fx,fy) coordinate on that horizontal plane.
+
+C
+                double tx = fx - floor(fx);
+                double ty = fy - floor(fy);
+
+                int tex_x = (int)(tx * atlas->tex_w);
+                int tex_y = (int)(ty * atlas->tex_h);
+Lines 137–141: Discards the integer portion (fx - floor(fx)) to isolate the fraction. This fraction represents the local coordinate inside that specific tile. It is multiplied by the individual tile size to determine the exact texel coordinate (tex_x, tex_y).
+
+C
+                int tex_col = tex_idx % atlas->count_x;
+                int tex_row = tex_idx / atlas->count_x;
+                int px_idx = ((tex_row * atlas->tex_h + tex_y) * atlas->width + (tex_col * atlas->tex_w + tex_x)) * 3;
+
+                r = atlas->data[px_idx];
+                g = atlas->data[px_idx + 1];
+                b = atlas->data[px_idx + 2];
+
+                write_pixel(file, r, g, b);
+                continue;
+            }
+Lines 143–153: Resolves where the target tile index is located inside the atlas sheet grid. It maps this to a 1D pixel offset entry array px_idx, extracts the RGB channels, writes the pixel out, and advances to the next pixel.
+
+Wall Mapping Calculations (Task 4)
+C
+            double wz = pz + column_t[x] * rz;
+            if (wz > -0.0001 && wz < 0.0) wz = 0.0;
+            if (wz > 1.0 && wz < 1.0001) wz = 1.0;
+Lines 156–158: If the execution reaches here, the pixel lands on a wall. wz computes the exact height factor along the vertical wall section where the ray hit. Floating-point errors are rounded to ensure values stay within [0.0,1.0].
+
+C
+            if (wz >= 0.0 && wz <= 1.0) {
+                int hit_x_side = column_side[x];
+                double wx = pos_x + column_t[x] * rx;
+                double wy = pos_y + column_t[x] * ry;
+
+                double tx = (hit_x_side == 1) ? wy : wx;
+                tx = tx - floor(tx);
+                int tex_x = (int)(tx * atlas->tex_w);
+Lines 160–167: Computes the exact global wall intersection point (wx, wy). If an X-axis grid boundary was struck, the texture must wrap along the Y dimension (wy), otherwise it wraps along the X dimension (wx). It extracts the fractional part and calculates tex_x.
+
+C
+                if ((rx < 0.0 && hit_x_side == 1) || (ry > 0.0 && hit_x_side == 0)) {
+                    tex_x = (atlas->tex_w - 1) - tex_x;
+                }
+Lines 169–171: This check prevents texture mirroring. Depending on whether you look at a wall from the left/right or top/bottom, the texture horizontal projection could appear reversed. Flipping tex_x keeps textures oriented correctly regardless of viewing angle.
+
+C
+                double ty = wz - floor(wz);
+                int tex_y = (int)(ty * atlas->tex_h);
+                tex_y = (atlas->tex_h - 1) - tex_y; 
+Lines 173–175: Resolves vertical texturing coordinate assignment. Because image arrays treat index 0 as the top row, we invert tex_y to ensure the texture's top aligns with the wall's ceiling intersection (z=1).
+
+C
+                int map_x = column_mapX[x];
+                int map_y = column_mapY[x];
+                char cell = map->grid[map_y][map_x];
+                
+                int tex_idx = 2; 
+                if (cell >= '0' && cell <= '9') {
+                    tex_idx = cell - '0';
+                }
+Lines 177–183: Looks up the map grid symbol character that was hit. Characters '0' through '9' are converted to integer indices 0…9. Other wall symbols default to tile index 2.
+
+C
+                int tex_col = tex_idx % atlas->count_x;
+                int tex_row = tex_idx / atlas->count_x;
+                int px_idx = ((tex_row * atlas->tex_h + tex_y) * atlas->width + (tex_col * atlas->tex_w + tex_x)) * 3;
+
+                r = atlas->data[px_idx];
+                g = atlas->data[px_idx + 1];
+                b = atlas->data[px_idx + 2];
+Lines 185–191: Calculates the index and loads the raw RGB colors from the texture atlas.
+
+C
+                if (shade && hit_x_side == 0) {
+                    r = (r >> 1) & 0x7F;
+                    g = (g >> 1) & 0x7F;
+                    b = (b >> 1) & 0x7F;
+                }
+                
+                write_pixel(file, r, g, b);
+            }
+        }
+    }
+Lines 194–202: Shading step: If the shade argument is active and the ray hit a Y-side grid wall, the RGB values are bit-shifted right by 1 (>> 1), which divides them by 2. This darkens the wall to create clear corners in the 3D environment.
+
+C
+    free(column_t);
+    free(column_side);
+    free(column_hit);
+    free(column_mapX);
+    free(column_mapY);
+    free(column_rx);
+    free(column_ry);
+    fclose(file);
+}
+Lines 205–213: Cleans up our temporary column caching heap records and safely closes the rendered output file handle.
+
+4. main.c Modifications
+C
+    } else if (strcmp(command, "-T") == 0) {
+        if (argc < 13) {
+            fprintf(stderr, "Error: Missing parameters for -T\n");
+            free_map(map);
+            return 1;
+        }
+Lines 1–6: Extends the argument dispatcher to look for the -T option. If fewer than 13 arguments are supplied, it prints an error, cleans up the map allocation, and exits.
+
+C
+        const char *tex_file = argv[3];
+        int count_x = atoi(argv[4]);
+        int count_y = atoi(argv[5]);
+        const char *output_file = argv[6];
+        int width = atoi(argv[7]);
+        int height = atoi(argv[8]);
+        double fov = atof(argv[9]);
+        double rotation = atof(argv[10]);
+        double pos_x = atof(argv[11]);
+        double pos_y = atof(argv[12]);
+Lines 8–17: Parses the positional arguments required to define the viewport frame perspective and map context.
+
+C
+        int shade = 0;
+        int ceiling = 0;
+
+        if (argc > 13) shade = atoi(argv[13]);
+        if (argc > 14) ceiling = atoi(argv[14]);
+Lines 19–23: Decodes optional rendering flags. If the command provides a 13th or 14th argument, it toggles shading and floor/ceiling rendering options accordingly.
+
+C
+        TextureAtlas *atlas = load_texture_atlas(tex_file, count_x, count_y);
+        if (!atlas) {
+            fprintf(stderr, "Error: Could not load texture atlas %s\n", tex_file);
+            free_map(map);
+            return 1;
+        }
+Lines 25–30: Calls the texture routine to read the atlas image file into memory. If it fails, it frees the map data and returns an error code.
+
+C
+        render_texture_map(map, output_file, width, height, fov, rotation, pos_x, pos_y, atlas, shade, ceiling);
+
+        free_texture_atlas(atlas);
+Lines 32–35: Runs our textured raycaster with the parsed configurations and frees the allocated texture atlas memory before exiting.

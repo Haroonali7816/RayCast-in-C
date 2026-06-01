@@ -5,6 +5,7 @@
 #include "map.h"
 #include "minimap.h"
 #include "render.h"
+#include "texture.h"
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -49,6 +50,41 @@ int main(int argc, char *argv[]) {
         double pos_y = atof(argv[9]);
 
         render_map(map, output_file, width, height, fov, rotation, pos_x, pos_y);
+    } else if (strcmp(command, "-T") == 0) {
+        // This handles task 4 & 5 : The -T flag
+        if (argc < 13) {
+            fprintf(stderr, "Error: Missing parameters for -T\n");
+            free_map(map);
+            return 1;
+        }
+
+        const char *tex_file = argv[3];
+        int count_x = atoi(argv[4]);
+        int count_y = atoi(argv[5]);
+        const char *output_file = argv[6];
+        int width = atoi(argv[7]);
+        int height = atoi(argv[8]);
+        double fov = atof(argv[9]);
+        double rotation = atof(argv[10]);
+        double pos_x = atof(argv[11]);
+        double pos_y = atof(argv[12]);
+
+        int shade = 0;
+        int ceiling = 0;
+
+        if (argc > 13) shade = atoi(argv[13]);
+        if (argc > 14) ceiling = atoi(argv[14]);
+
+        TextureAtlas *atlas = load_texture_atlas(tex_file, count_x, count_y);
+        if (!atlas) {
+            fprintf(stderr, "Error: Could not load texture atlas %s\n", tex_file);
+            free_map(map);
+            return 1;
+        }
+
+        render_texture_map(map, output_file, width, height, fov, rotation, pos_x, pos_y, atlas, shade, ceiling);
+
+        free_texture_atlas(atlas);
     } else {
         fprintf(stderr, "Error: Unknown command %s\n", command);
     }
